@@ -17,7 +17,12 @@ namespace Mina_Sprite_Repacker
             public int Align;
             public byte[] Data;
         }
-        public static void ExtractAllSprites()
+        class FrameEntry
+        {
+            public int TextureIdx;
+            public int TextureShadowIdx = -1;
+        }
+        public static void ExtractAllSprites(bool useSequenceNames)
         {
             var anbFiles = Directory.EnumerateFiles(Constants.currentDirectory, "*.anb.yc", SearchOption.AllDirectories);
 
@@ -42,12 +47,19 @@ namespace Mina_Sprite_Repacker
                     continue;
                 }
 
-                if (!TryParseAnimDef(fileContent, out string paletteName, out List<string> frameNames, out List<TextureEntry> textures)) {
+                if (!TryParseAnimDef(fileContent, out string paletteName, out List<string> frameNames,
+                        out List<TextureEntry> textures, out Dictionary<int, string> textureNames)) {
                     continue;
                 }
 
                 for (int i = 0; i < textures.Count; i++) {
-                    string frameName = (i < frameNames.Count) ? frameNames[i] : $"{i}";
+                    string frameName;
+                    if (useSequenceNames) {
+                        frameName = textureNames.TryGetValue(i, out string seqName) ? seqName : $"{i}";
+                    }
+                    else {
+                        frameName = (i < frameNames.Count) ? frameNames[i] : $"{i}";
+                    }
                     ExtractSprite(anbFile, paletteName, frameName, textures[i]);
                 }
             }
@@ -57,7 +69,7 @@ namespace Mina_Sprite_Repacker
             string palettePath = Path.Combine(Constants.currentDirectory, paletteName);
             var palette = LoadPalette(palettePath);
             if (palette == null) {
-                Console.WriteLine($"Could not load palette '{palettePath}'");
+                //Console.WriteLine($"Could not load palette '{palettePath}' for {anbFile}");
                 return;
             }
 
@@ -76,7 +88,7 @@ namespace Mina_Sprite_Repacker
             string outDir = Path.Combine(Constants.currentDirectory, Constants.spritesFolderName, relativeDir, baseName);
             Directory.CreateDirectory(outDir);
 
-            string outPath = Path.Combine(outDir, frameName + ".png");
+            string outPath = Path.Combine(outDir, SanitizeFileName(frameName) + ".png");
             WriteIndexedPng(outPath, texture.Width, texture.Height, indexed,
                 palette.Value.rgb, palette.Value.alpha);
         }
@@ -126,11 +138,12 @@ namespace Mina_Sprite_Repacker
             }
             return (rgb, alpha);
         }
-        static bool TryParseAnimDef(string fileContent, out string palettePath, out List<string> frameNames, out List<TextureEntry> textures)
+        static bool TryParseAnimDef(string fileContent, out string palettePath, out List<string> frameNames, out List<TextureEntry> textures, out Dictionary<int, string> textureNames)
         {
             palettePath = null;
             frameNames = null;
             textures = null;
+            textureNames = new Dictionary<int, string>();
 
             // Check if file is ycCutter2AnimDef
             string[] firstLines = fileContent.Split('\n', 3);
@@ -145,13 +158,15 @@ namespace Mina_Sprite_Repacker
             // Get sequence data
             frameNames = new List<string>();
             int frameCounter = 0;
+            var sequenceInfos = new List<(string Name, List<int> FrameIndices)>();
 
             int seqPos = fileContent.IndexOf("m_sequences:");
+            int seqArrClose = -1;
             if (seqPos >= 0) {
                 int arrOpen = fileContent.IndexOf('[', seqPos);
-                int arrClose = FindClosingBrace(fileContent, arrOpen);
-                if (arrClose < 0) return false;
-                string seqSection = fileContent.Substring(arrOpen, arrClose - arrOpen + 1);
+                seqArrClose = FindClosingBrace(fileContent, arrOpen);
+                if (seqArrClose < 0) return false;
+                string seqSection = fileContent.Substring(arrOpen, seqArrClose - arrOpen + 1);
 
                 foreach (Match sm in Regex.Matches(seqSection, @"ycCutter2Sequence(?!Frame)")) {
                     int bo = seqSection.IndexOf('{', sm.Index);
@@ -166,12 +181,66 @@ namespace Mina_Sprite_Repacker
                     }
                     string name = nm.Groups[1].Value;
 
-                    // Name the exported sprites
+                    var seqFrameIndices = new List<int>();
+
                     foreach (Match fm in Regex.Matches(seqBlock, @"ycCutter2SequenceFrame")) {
-                        string frameName = $"{frameCounter}_{name}";
+                        int fbo = seqBlock.IndexOf('{', fm.Index);
+                        int fbc = FindClosingBrace(seqBlock, fbo);
+                        int frameIndex = 0;
+                        if (fbc >= 0) {
+                            string frameBlock = seqBlock.Substring(fbo, fbc - fbo + 1);
+                            var fiMatch = Regex.Match(frameBlock, @"m_frameIndex:\s*(\d+)");
+                            if (fiMatch.Success) frameIndex = int.Parse(fiMatch.Groups[1].Value);
+                        }
+                        seqFrameIndices.Add(frameIndex);
+
                         frameNames.Add($"{frameCounter}");
                         frameCounter++;
                     }
+
+                    sequenceInfos.Add((name, seqFrameIndices));
+                }
+            }
+
+            // Parse top-level m_frames
+            var frameEntries = new List<FrameEntry>();
+            int framesSearchStart = seqArrClose >= 0 ? seqArrClose : 0;
+            int framesPos = fileContent.IndexOf("m_frames:", framesSearchStart);
+            if (framesPos >= 0) {
+                int arrOpen = fileContent.IndexOf('[', framesPos);
+                int arrClose = FindClosingBrace(fileContent, arrOpen);
+                if (arrClose >= 0) {
+                    string framesSection = fileContent.Substring(arrOpen, arrClose - arrOpen + 1);
+                    foreach (Match fm in Regex.Matches(framesSection, @"ycCutter2Frame\b")) {
+                        int bo = framesSection.IndexOf('{', fm.Index);
+                        int bc = FindClosingBrace(framesSection, bo);
+                        if (bc < 0) continue;
+                        string block = framesSection.Substring(bo, bc - bo + 1);
+
+                        var entry = new FrameEntry();
+                        var ti = Regex.Match(block, @"m_textureIdx:\s*(\d+)");
+                        entry.TextureIdx = ti.Success ? int.Parse(ti.Groups[1].Value) : 0;
+
+                        var tsi = Regex.Match(block, @"m_textureShadowIdx:\s*(\d+)");
+                        entry.TextureShadowIdx = tsi.Success ? int.Parse(tsi.Groups[1].Value) : -1;
+
+                        frameEntries.Add(entry);
+                    }
+                }
+            }
+
+            // Build texture name dictionary
+            var processedFrameIndices = new HashSet<int>();
+            foreach (var (seqName, seqFrameIndices) in sequenceInfos) {
+                foreach (int frameIndex in seqFrameIndices) {
+                    if (!processedFrameIndices.Add(frameIndex)) continue;
+                    if (frameIndex >= frameEntries.Count) continue;
+
+                    var frame = frameEntries[frameIndex];
+                    if (!textureNames.ContainsKey(frame.TextureIdx))
+                        textureNames[frame.TextureIdx] = $"{frame.TextureIdx}_{seqName}";
+                    if (frame.TextureShadowIdx >= 0 && !textureNames.ContainsKey(frame.TextureShadowIdx))
+                        textureNames[frame.TextureShadowIdx] = $"{frame.TextureShadowIdx}_{seqName}_shadow";
                 }
             }
 
@@ -288,6 +357,12 @@ namespace Mina_Sprite_Repacker
             Chunk(fs, "tRNS", alpha);
             Chunk(fs, "IDAT", Zlib(raw));
             Chunk(fs, "IEND", Array.Empty<byte>());
+        }
+        static string SanitizeFileName(string name)
+        {
+            foreach (char c in Path.GetInvalidFileNameChars())
+                name = name.Replace(c, '_');
+            return name;
         }
         static void Chunk(Stream s, string type, byte[] data)
         {

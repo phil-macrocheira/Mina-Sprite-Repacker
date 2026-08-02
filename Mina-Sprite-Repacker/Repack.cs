@@ -40,6 +40,9 @@ namespace Mina_Sprite_Repacker
             }
 
             string pngName = Path.GetFileNameWithoutExtension(spritePath);
+            if (pngName.Contains('_')) {
+                pngName = pngName.Split('_')[0];
+            }
             if (!int.TryParse(pngName, out int textureIndex)) {
                 Console.WriteLine($"Cannot determine texture index from '{pngName}'");
                 return;

@@ -1,0 +1,8 @@
+{
+  "profiles": {
+    "Mina-Sprite-Repacker": {
+      "commandName": "Project",
+      "commandLineArgs": "-r \"C:\\Users\\Phil\\source\\repos\\Mina-Sprite-Repacker\\Mina-Sprite-Repacker\\bin\\Debug\\net10.0\\_my_sprites\\NPCs\\sailorBig\\0.png\""
+    }
+  }
+}

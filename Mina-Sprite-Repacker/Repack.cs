@@ -9,7 +9,7 @@ namespace Mina_Sprite_Repacker
         public static void RepackAllSprites(string rootDirectory)
         {
             string spritesDirectory = Path.Combine(rootDirectory, "_my_sprites");
-            var spritePaths = Directory.EnumerateFiles(rootDirectory, "*.png", SearchOption.AllDirectories);
+            var spritePaths = Directory.EnumerateFiles(spritesDirectory, "*.png", SearchOption.AllDirectories);
 
             foreach (string spritePath in spritePaths) {
                 RepackSingleSprite(rootDirectory, spritePath);
@@ -23,6 +23,15 @@ namespace Mina_Sprite_Repacker
                 Console.WriteLine($"PNG not found: {spritePath}");
                 return;
             }
+
+            // temp fix
+            string marker = Path.DirectorySeparatorChar + "_my_sprites" + Path.DirectorySeparatorChar;
+            int markerIdx = spritePath.IndexOf(marker);
+            if (markerIdx < 0) {
+                Console.WriteLine($"Cannot find '_my_sprites' in path: {spritePath}");
+                return;
+            }
+            rootDirectory = spritePath.Substring(0, markerIdx);
 
             string spritesRoot = Path.Combine(rootDirectory, "_my_sprites");
             string relativeFromSprites = Path.GetRelativePath(spritesRoot, spritePath);
@@ -46,28 +55,8 @@ namespace Mina_Sprite_Repacker
             byte[] indexed = ReadIndexedPng(spritePath, out int w, out int h);
             var (pngRgb, pngAlpha, pngColorCount) = ReadPngPalette(spritePath);
 
-            // OUTPUT INDEXED DATA
-            for (int y = 0; y < h; y++) {
-                // Loop through columns (width)
-                for (int x = 0; x < w; x++) {
-                    // Calculate the 1D array index for this 2D coordinate
-                    byte pixelIndex = indexed[y * w + x];
-
-                    if (pixelIndex == 0) {
-                        // Print a faint dot or spaces for the transparent background
-                        Console.Write(" . ");
-                    }
-                    else {
-                        // Print the index number padded to 2 characters so the grid aligns
-                        Console.Write($"{pixelIndex,2} ");
-                    }
-                }
-                // Move to the next line after finishing a row
-                Console.WriteLine();
-            }
-
-                // Compress pixels
-                byte[] compressed = WflzCompress(indexed);
+            // Compress pixels
+            byte[] compressed = WflzCompress(indexed);
 
             string content = File.ReadAllText(anbPath);
 
@@ -85,8 +74,8 @@ namespace Mina_Sprite_Repacker
                 UpdatePaletteWithGlobal(palettePath, globalPalPath, pngRgb, pngAlpha, pngColorCount);
             }
 
-            // Replace texture data
-            string modified = ReplaceTextureData(content, textureIndex, compressed);
+            // Replace texture data, dimensions, and size
+            string modified = ReplaceTextureData(content, textureIndex, compressed, w, h);
             if (modified == null) {
                 Console.WriteLine($"Failed to find texture index {textureIndex} in '{anbPath}'");
                 return;
@@ -119,29 +108,22 @@ namespace Mina_Sprite_Repacker
 
             string colorsSection = content.Substring(arrOpen + 1, arrClose - arrOpen - 1);
 
-            // Walk through the array, handling both ycColor blocks and bare commas
             int pos = 0;
-            // Skip past the Reserve declaration
             int reserveEnd = colorsSection.IndexOf(')');
             if (reserveEnd >= 0) pos = reserveEnd + 1;
 
             while (pos < colorsSection.Length) {
-                // Skip whitespace
                 while (pos < colorsSection.Length && char.IsWhiteSpace(colorsSection[pos])) pos++;
                 if (pos >= colorsSection.Length) break;
 
                 if (colorsSection[pos] == ',') {
-                    // Check if this is a bare comma (empty slot) or trailing comma after a block
-                    // Look back to see if we just finished a ycColor block
                     pos++;
                     continue;
                 }
 
-                // Look for ycColor
                 int ycPos = colorsSection.IndexOf("ycColor", pos);
                 if (ycPos < 0) break;
 
-                // Check if there are bare commas between current pos and this ycColor
                 string between = colorsSection.Substring(pos, ycPos - pos);
                 int bareCommas = CountBareCommas(between);
                 for (int i = 0; i < bareCommas; i++)
@@ -207,7 +189,7 @@ namespace Mina_Sprite_Repacker
 
             return bestIdx;
         }
-        static string ReplaceTextureData(string content, int textureIndex, byte[] compressed)
+        static string ReplaceTextureData(string content, int textureIndex, byte[] compressed, int newWidth, int newHeight)
         {
             string newBase64 = Convert.ToBase64String(compressed);
             int newSize = compressed.Length;
@@ -231,8 +213,18 @@ namespace Mina_Sprite_Repacker
 
                     string block = content.Substring(bo, bc - bo + 1);
 
-                    // Replace data
+                    // Replace m_width
                     string newBlock = Regex.Replace(block,
+                        @"(m_width:\s*)\d+",
+                        "${1}" + newWidth);
+
+                    // Replace m_height
+                    newBlock = Regex.Replace(newBlock,
+                        @"(m_height:\s*)\d+",
+                        "${1}" + newHeight);
+
+                    // Replace data
+                    newBlock = Regex.Replace(newBlock,
                         @"(\bdata:\s*"")[^""]*("")",
                         "${1}" + newBase64 + "${2}");
 
@@ -254,8 +246,6 @@ namespace Mina_Sprite_Repacker
             width = 0;
             height = 0;
 
-            int transIndex = -1;
-
             var idatChunks = new MemoryStream();
 
             while (pos + 12 <= file.Length) {
@@ -268,16 +258,6 @@ namespace Mina_Sprite_Repacker
                            | (file[pos + 10] << 8) | file[pos + 11];
                     height = (file[pos + 12] << 24) | (file[pos + 13] << 16)
                            | (file[pos + 14] << 8) | file[pos + 15];
-                }
-                else if (type == "tRNS") {
-                    byte minAlpha = 255;
-                    for (int i = 0; i < chunkLen; i++) {
-                        byte alpha = file[pos + 8 + i];
-                        if (alpha < minAlpha) {
-                            minAlpha = alpha;
-                            transIndex = i;
-                        }
-                    }
                 }
                 else if (type == "IDAT") {
                     idatChunks.Write(file, pos + 8, chunkLen);
@@ -320,20 +300,6 @@ namespace Mina_Sprite_Repacker
                 Array.Copy(indices, dst, prevRow, 0, width);
             }
 
-            // Ensure transparency is 0
-            if (transIndex > 0) {
-                for (int i = 0; i < indices.Length; i++) {
-                    if (indices[i] == 0) {
-                        // Move the original 0 out of the way (it becomes 3)
-                        indices[i] = (byte)transIndex;
-                    }
-                    else if (indices[i] == transIndex) {
-                        // Make the transparent pixel 0
-                        indices[i] = 0;
-                    }
-                }
-            }
-
             return indices;
         }
         static (byte[] rgb, byte[] alpha, int count) ReadPngPalette(string path)
@@ -372,30 +338,6 @@ namespace Mina_Sprite_Repacker
                 for (int i = 0; i < Math.Min(trns.Length, count); i++)
                     alpha[i] = trns[i];
 
-            // Force transparency to be first
-            if (count > 1) {
-                int transIndex = 0;
-                byte minAlpha = alpha[0];
-                for (int i = 1; i < count; i++) {
-                    if (alpha[i] < minAlpha) {
-                        minAlpha = alpha[i];
-                        transIndex = i;
-                    }
-                }
-                if (transIndex > 0) {
-                    alpha[transIndex] = alpha[0];
-                    alpha[0] = minAlpha;
-                    int t = transIndex * 3;
-                    byte tempR = rgb[0], tempG = rgb[1], tempB = rgb[2];
-                    rgb[0] = rgb[t];
-                    rgb[1] = rgb[t + 1];
-                    rgb[2] = rgb[t + 2];
-                    rgb[t] = tempR;
-                    rgb[t + 1] = tempG;
-                    rgb[t + 2] = tempB;
-                }
-            }
-
             return (rgb, alpha, count);
         }
         static void UpdatePaletteWithGlobal(string palettePath, string globalPalPath, byte[] pngRgb, byte[] pngAlpha, int pngColorCount)
@@ -412,14 +354,12 @@ namespace Mina_Sprite_Repacker
                 return;
             }
 
-            // Parse global palette
             var globalColors = ParsePaletteColors(globalPalPath);
             if (globalColors.Count == 0) {
                 Console.WriteLine($"Could not parse global palette: {globalPalPath}");
                 return;
             }
 
-            // Map each PNG color to a global index
             var globalIndices = new int[pngColorCount];
             int paletteWidth = 0;
 
@@ -438,6 +378,22 @@ namespace Mina_Sprite_Repacker
                 @"(m_paletteWidth:\s*)\d+",
                 "${1}" + paletteWidth);
 
+            // Update m_colors
+            int colorsPos = content.IndexOf("m_colors:");
+            if (colorsPos >= 0) {
+                int colorsOpen = content.IndexOf('[', colorsPos);
+                int colorsClose = FindClosingBrace(content, colorsOpen);
+                if (colorsClose >= 0) {
+                    var reserveMatch = Regex.Match(
+                        content.Substring(colorsOpen, colorsClose - colorsOpen + 1),
+                        @"Reserve:\s*(\d+)");
+                    int reserve = reserveMatch.Success ? int.Parse(reserveMatch.Groups[1].Value) : 255;
+
+                    string newColors = BuildColorsSection(pngRgb, pngAlpha, pngColorCount, reserve);
+                    content = content.Substring(0, colorsOpen) + newColors + content.Substring(colorsClose + 1);
+                }
+            }
+
             // Update m_globalIndexData
             int indexPos = content.IndexOf("m_globalIndexData:");
             if (indexPos >= 0) {
@@ -455,6 +411,45 @@ namespace Mina_Sprite_Repacker
             }
 
             File.WriteAllText(palettePath, content);
+        }
+        static string BuildColorsSection(byte[] rgb, byte[] alpha, int colorCount, int reserve)
+        {
+            var sb = new StringBuilder();
+            sb.Append("[ ( Reserve: " + reserve + " ) \n");
+
+            bool needComma = false;
+            for (int i = 0; i < reserve; i++) {
+                if (needComma) sb.Append(", ");
+                needComma = true;
+
+                if (i >= colorCount)
+                    continue;
+
+                byte r = rgb[i * 3];
+                byte g = rgb[i * 3 + 1];
+                byte b = rgb[i * 3 + 2];
+                byte a = alpha[i];
+
+                // Transparent entry: write ycColor with RGB but no alpha
+                if (a == 0) {
+                    sb.Append("\t\tycColor\n\t\t{\n");
+                    if (r != 0) sb.Append($"\t\t\tr: {r},\n");
+                    if (g != 0) sb.Append($"\t\t\tg: {g},\n");
+                    if (b != 0) sb.Append($"\t\t\tb: {b},\n");
+                    sb.Append("\t\t}");
+                    continue;
+                }
+
+                sb.Append("\t\tycColor\n\t\t{\n");
+                if (r != 0) sb.Append($"\t\t\tr: {r},\n");
+                if (g != 0) sb.Append($"\t\t\tg: {g},\n");
+                if (b != 0) sb.Append($"\t\t\tb: {b},\n");
+                if (a != 0) sb.Append($"\t\t\ta: {a},\n");
+                sb.Append("\t\t}");
+            }
+
+            sb.Append(" ]");
+            return sb.ToString();
         }
         static string BuildGlobalIndexSection(int[] globalIndices, int colorCount, int reserve)
         {

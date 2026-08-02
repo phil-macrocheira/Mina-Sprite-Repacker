@@ -2,7 +2,8 @@
   "profiles": {
     "Mina-Sprite-Repacker": {
       "commandName": "Project",
-      "commandLineArgs": "-r \"C:\\Users\\Phil\\source\\repos\\Mina-Sprite-Repacker\\Mina-Sprite-Repacker\\bin\\Debug\\net10.0\\_my_sprites\\NPCs\\sailorBig\\0.png\""
+      "commandLineArgs": "-r \"C:\\Users\\Phil\\AppData\\Roaming\\Yacht Club Games\\Mina the Hollower\\mods\\UFO50\\data\\_my_sprites\\dialogue\\charPortraitTrainAuthority\\0.png\"",
+      "workingDirectory": "C:\\Users\\Phil\\AppData\\Roaming\\Yacht Club Games\\Mina the Hollower\\mods\\UFO50\\data"
     }
   }
 }

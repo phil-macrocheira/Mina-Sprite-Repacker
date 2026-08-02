@@ -4,7 +4,7 @@
     {
         static void Main(string[] args)
         {
-            string currentDirectory = Path.GetDirectoryName(Environment.ProcessPath);
+            string currentDirectory = Path.GetDirectoryName(Environment.CurrentDirectory);
             bool repackMode = false;
             string repackFilePath = "";
 

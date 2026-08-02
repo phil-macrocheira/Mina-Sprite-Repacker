@@ -17,11 +17,11 @@ namespace Mina_Sprite_Repacker
             public int Align;
             public byte[] Data;
         }
-        public static void ExtractAllSprites(string rootDirectory)
+        public static void ExtractAllSprites()
         {
-            var anbFiles = Directory.EnumerateFiles(rootDirectory, "*.anb.yc", SearchOption.AllDirectories);
+            var anbFiles = Directory.EnumerateFiles(Constants.currentDirectory, "*.anb.yc", SearchOption.AllDirectories);
 
-            string outDirectory = Path.Combine(rootDirectory, "_my_sprites");
+            string outDirectory = Path.Combine(Constants.currentDirectory, "_my_sprites");
             if (Directory.Exists(outDirectory)) {
                 Directory.Delete(outDirectory, true);
             }
@@ -48,13 +48,13 @@ namespace Mina_Sprite_Repacker
 
                 for (int i = 0; i < textures.Count; i++) {
                     string frameName = (i < frameNames.Count) ? frameNames[i] : $"{i}";
-                    ExtractSprite(rootDirectory, anbFile, paletteName, frameName, textures[i]);
+                    ExtractSprite(anbFile, paletteName, frameName, textures[i]);
                 }
             }
         }
-        static void ExtractSprite(string rootDirectory, string anbFile, string paletteName, string frameName, TextureEntry texture)
+        static void ExtractSprite(string anbFile, string paletteName, string frameName, TextureEntry texture)
         {
-            string palettePath = Path.Combine(rootDirectory, paletteName);
+            string palettePath = Path.Combine(Constants.currentDirectory, paletteName);
             var palette = LoadPalette(palettePath);
             if (palette == null) {
                 Console.WriteLine($"Could not load palette '{palettePath}'");
@@ -68,12 +68,12 @@ namespace Mina_Sprite_Repacker
                 return;
             }
 
-            string relativePath = Path.GetRelativePath(rootDirectory, anbFile);
+            string relativePath = Path.GetRelativePath(Constants.currentDirectory, anbFile);
             string relativeDir = Path.GetDirectoryName(relativePath) ?? "";
             string baseName = Path.GetFileName(relativePath);
             baseName = baseName.Replace(".anb.yc", "");
 
-            string outDir = Path.Combine(rootDirectory, "_my_sprites", relativeDir, baseName);
+            string outDir = Path.Combine(Constants.currentDirectory, Constants.spritesFolderName, relativeDir, baseName);
             Directory.CreateDirectory(outDir);
 
             string outPath = Path.Combine(outDir, frameName + ".png");
@@ -166,10 +166,10 @@ namespace Mina_Sprite_Repacker
                     }
                     string name = nm.Groups[1].Value;
 
+                    // Name the exported sprites
                     foreach (Match fm in Regex.Matches(seqBlock, @"ycCutter2SequenceFrame")) {
                         string frameName = $"{frameCounter}_{name}";
                         frameNames.Add($"{frameCounter}");
-                        //frameNames.Add(frameName + "_sub");
                         frameCounter++;
                     }
                 }
@@ -241,19 +241,16 @@ namespace Mina_Sprite_Repacker
             int src = hdr + 16;
             int end = hdr + 16 + compSize;
 
-            // Copy initial literals from the header's first block
             int numLiterals = f[hdr + 15];
             for (int i = 0; i < numLiterals && o < decompSize && src < end; i++)
                 outBuf[o++] = f[src++];
 
-            // Process encoded blocks
             while (o < decompSize && src + 4 <= end) {
                 int dist = f[src] | (f[src + 1] << 8);
                 int len = f[src + 2];
                 numLiterals = f[src + 3];
                 src += 4;
 
-                // Match copy
                 if (len > 0) {
                     int matchLen = len + 4;
                     int cpy = o - dist;
@@ -262,7 +259,6 @@ namespace Mina_Sprite_Repacker
                         outBuf[o++] = outBuf[cpy + i];
                 }
 
-                // Literal copy
                 for (int i = 0; i < numLiterals && o < decompSize && src < end; i++)
                     outBuf[o++] = f[src++];
             }
@@ -272,7 +268,7 @@ namespace Mina_Sprite_Repacker
         {
             if (w <= 0) w = 1;
             if (h <= 0) h = 1;
-            var raw = new byte[(w + 1) * h]; // filter byte 0 per scanline
+            var raw = new byte[(w + 1) * h];
             for (int y = 0; y < h; y++)
                 for (int x = 0; x < w; x++) {
                     int i = y * w + x;
@@ -285,8 +281,8 @@ namespace Mina_Sprite_Repacker
             var ihdr = new byte[13];
             WriteBE(ihdr, 0, (uint)w);
             WriteBE(ihdr, 4, (uint)h);
-            ihdr[8] = 8; // bit depth
-            ihdr[9] = 3; // color type 3 = indexed
+            ihdr[8] = 8;
+            ihdr[9] = 3;
             Chunk(fs, "IHDR", ihdr);
             Chunk(fs, "PLTE", rgb);
             Chunk(fs, "tRNS", alpha);
@@ -303,11 +299,11 @@ namespace Mina_Sprite_Repacker
 
             EnsureCrcTable();
             uint crc = 0xFFFFFFFF;
-            for (int i = 0; i < t.Length; i++)          // 1. type bytes first
+            for (int i = 0; i < t.Length; i++)
                 crc = _crcT[(crc ^ t[i]) & 0xFF] ^ (crc >> 8);
-            for (int i = 0; i < data.Length; i++)        // 2. data bytes second
+            for (int i = 0; i < data.Length; i++)
                 crc = _crcT[(crc ^ data[i]) & 0xFF] ^ (crc >> 8);
-            crc ^= 0xFFFFFFFF;                           // 3. finalize
+            crc ^= 0xFFFFFFFF;
 
             var c = new byte[4]; WriteBE(c, 0, crc);
             s.Write(c, 0, 4);
@@ -326,7 +322,7 @@ namespace Mina_Sprite_Repacker
         static byte[] Zlib(byte[] raw)
         {
             using var ms = new MemoryStream();
-            ms.WriteByte(0x78); ms.WriteByte(0x9C); // zlib header
+            ms.WriteByte(0x78); ms.WriteByte(0x9C);
             using (var ds = new DeflateStream(ms, CompressionLevel.Optimal, true))
                 ds.Write(raw, 0, raw.Length);
             uint a = Adler32(raw);

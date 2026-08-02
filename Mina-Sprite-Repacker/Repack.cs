@@ -6,39 +6,29 @@ namespace Mina_Sprite_Repacker
 {
     public static class Repack
     {
-        public static void RepackAllSprites(string rootDirectory)
+        public static void RepackAllSprites()
         {
-            string spritesDirectory = Path.Combine(rootDirectory, "_my_sprites");
-            var spritePaths = Directory.EnumerateFiles(spritesDirectory, "*.png", SearchOption.AllDirectories);
+            var spritePaths = Directory.EnumerateFiles(Constants.spritesRoot, "*.png", SearchOption.AllDirectories);
 
             foreach (string spritePath in spritePaths) {
-                RepackSingleSprite(rootDirectory, spritePath);
+                RepackSingleSprite(spritePath);
             }
 
             return;
         }
-        public static void RepackSingleSprite(string rootDirectory, string spritePath)
+        public static void RepackSingleSprite(string spritePath)
         {
             if (!File.Exists(spritePath)) {
                 Console.WriteLine($"PNG not found: {spritePath}");
                 return;
             }
 
-            // temp fix
-            string marker = Path.DirectorySeparatorChar + "_my_sprites" + Path.DirectorySeparatorChar;
-            int markerIdx = spritePath.IndexOf(marker);
-            if (markerIdx < 0) {
-                Console.WriteLine($"Cannot find '_my_sprites' in path: {spritePath}");
-                return;
-            }
-            rootDirectory = spritePath.Substring(0, markerIdx);
+            string anbFilename = Path.GetFileName(Path.GetDirectoryName(spritePath)) + ".anb.yc";
+            string anbPath = Path.Combine(Path.GetDirectoryName(Path.GetDirectoryName(spritePath)),anbFilename);
 
-            string spritesRoot = Path.Combine(rootDirectory, "_my_sprites");
-            string relativeFromSprites = Path.GetRelativePath(spritesRoot, spritePath);
-            string relativeDir = Path.GetDirectoryName(relativeFromSprites) ?? "";
-            string parentOfPng = Path.GetFileName(relativeDir);
-            string aboveParent = Path.GetDirectoryName(relativeDir) ?? "";
-            string anbPath = Path.Combine(rootDirectory, aboveParent, parentOfPng + ".anb.yc");
+            string[] pathParts = anbPath.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            var pathPartsFiltered = pathParts.Where(part => !string.Equals(part, Constants.spritesFolderName, StringComparison.OrdinalIgnoreCase));
+            anbPath = string.Join(Path.DirectorySeparatorChar.ToString(), pathPartsFiltered);
 
             if (!File.Exists(anbPath)) {
                 Console.WriteLine($"Cannot find original file: {anbPath}");
@@ -55,27 +45,27 @@ namespace Mina_Sprite_Repacker
             byte[] indexed = ReadIndexedPng(spritePath, out int w, out int h);
             var (pngRgb, pngAlpha, pngColorCount) = ReadPngPalette(spritePath);
 
+            // Parse global palette
+            string globalPalPath = FindGlobalPalette(Constants.currentDirectory);
+            var globalColors = ParsePaletteColors(globalPalPath);
+            if (globalColors.Count == 0)
+            {
+                Console.WriteLine($"Could not parse global palette: {globalPalPath}");
+                return;
+            }
+
             // Compress pixels
             byte[] compressed = WflzCompress(indexed);
 
             string content = File.ReadAllText(anbPath);
 
-            // Update palette file using global palette lookup
             var palMatch = Regex.Match(content, @"m_paletteName:\s*""([^""]+)""");
             if (palMatch.Success) {
-                string palettePath = Path.Combine(rootDirectory, palMatch.Groups[1].Value);
-                string globalPalPath = FindGlobalPalette(rootDirectory);
-
-                if (globalPalPath == null) {
-                    Console.WriteLine("Could not find global.pal.yc");
-                    return;
-                }
-
-                UpdatePaletteWithGlobal(palettePath, globalPalPath, pngRgb, pngAlpha, pngColorCount);
+                content = Regex.Replace(content, @"m_paletteName:\s*""([^""]+)""", "m_paletteName: " + Constants.globalPalettePath);
             }
 
-            // Replace texture data, dimensions, and size
-            string modified = ReplaceTextureData(content, textureIndex, compressed, w, h);
+            // Replace texture data
+            string modified = ReplaceTextureData(content, textureIndex, compressed);
             if (modified == null) {
                 Console.WriteLine($"Failed to find texture index {textureIndex} in '{anbPath}'");
                 return;
@@ -85,7 +75,7 @@ namespace Mina_Sprite_Repacker
         }
         static string FindGlobalPalette(string rootDirectory)
         {
-            var candidates = Directory.EnumerateFiles(rootDirectory, "global.pal.yc", SearchOption.AllDirectories);
+            var candidates = Directory.EnumerateFiles(rootDirectory, Constants.globalPaletteFilename, SearchOption.AllDirectories);
             return candidates.FirstOrDefault();
         }
         struct PaletteColor
@@ -108,22 +98,29 @@ namespace Mina_Sprite_Repacker
 
             string colorsSection = content.Substring(arrOpen + 1, arrClose - arrOpen - 1);
 
+            // Walk through the array, handling both ycColor blocks and bare commas
             int pos = 0;
+            // Skip past the Reserve declaration
             int reserveEnd = colorsSection.IndexOf(')');
             if (reserveEnd >= 0) pos = reserveEnd + 1;
 
             while (pos < colorsSection.Length) {
+                // Skip whitespace
                 while (pos < colorsSection.Length && char.IsWhiteSpace(colorsSection[pos])) pos++;
                 if (pos >= colorsSection.Length) break;
 
                 if (colorsSection[pos] == ',') {
+                    // Check if this is a bare comma (empty slot) or trailing comma after a block
+                    // Look back to see if we just finished a ycColor block
                     pos++;
                     continue;
                 }
 
+                // Look for ycColor
                 int ycPos = colorsSection.IndexOf("ycColor", pos);
                 if (ycPos < 0) break;
 
+                // Check if there are bare commas between current pos and this ycColor
                 string between = colorsSection.Substring(pos, ycPos - pos);
                 int bareCommas = CountBareCommas(between);
                 for (int i = 0; i < bareCommas; i++)
@@ -163,33 +160,7 @@ namespace Mina_Sprite_Repacker
             }
             return count;
         }
-        static int FindGlobalIndex(List<PaletteColor> globalColors, byte r, byte g, byte b, byte a)
-        {
-            if (a == 0) return -1;
-
-            int bestIdx = -1;
-            int bestDist = int.MaxValue;
-
-            for (int i = 0; i < globalColors.Count; i++) {
-                var gc = globalColors[i];
-                if (gc.IsEmpty) continue;
-                if (gc.A == 0) continue;
-
-                int dr = r - gc.R;
-                int dg = g - gc.G;
-                int db = b - gc.B;
-                int dist = dr * dr + dg * dg + db * db;
-
-                if (dist == 0) return i;
-                if (dist < bestDist) { bestDist = dist; bestIdx = i; }
-            }
-
-            if (bestDist > 0 && bestIdx >= 0)
-                Console.WriteLine($"Color {r},{g},{b} is outside global palette, using palette {bestIdx} instead");
-
-            return bestIdx;
-        }
-        static string ReplaceTextureData(string content, int textureIndex, byte[] compressed, int newWidth, int newHeight)
+        static string ReplaceTextureData(string content, int textureIndex, byte[] compressed)
         {
             string newBase64 = Convert.ToBase64String(compressed);
             int newSize = compressed.Length;
@@ -213,18 +184,8 @@ namespace Mina_Sprite_Repacker
 
                     string block = content.Substring(bo, bc - bo + 1);
 
-                    // Replace m_width
-                    string newBlock = Regex.Replace(block,
-                        @"(m_width:\s*)\d+",
-                        "${1}" + newWidth);
-
-                    // Replace m_height
-                    newBlock = Regex.Replace(newBlock,
-                        @"(m_height:\s*)\d+",
-                        "${1}" + newHeight);
-
                     // Replace data
-                    newBlock = Regex.Replace(newBlock,
+                    string newBlock = Regex.Replace(block,
                         @"(\bdata:\s*"")[^""]*("")",
                         "${1}" + newBase64 + "${2}");
 
@@ -246,6 +207,8 @@ namespace Mina_Sprite_Repacker
             width = 0;
             height = 0;
 
+            int transIndex = -1;
+
             var idatChunks = new MemoryStream();
 
             while (pos + 12 <= file.Length) {
@@ -258,6 +221,16 @@ namespace Mina_Sprite_Repacker
                            | (file[pos + 10] << 8) | file[pos + 11];
                     height = (file[pos + 12] << 24) | (file[pos + 13] << 16)
                            | (file[pos + 14] << 8) | file[pos + 15];
+                }
+                else if (type == "tRNS") {
+                    byte minAlpha = 255;
+                    for (int i = 0; i < chunkLen; i++) {
+                        byte alpha = file[pos + 8 + i];
+                        if (alpha < minAlpha) {
+                            minAlpha = alpha;
+                            transIndex = i;
+                        }
+                    }
                 }
                 else if (type == "IDAT") {
                     idatChunks.Write(file, pos + 8, chunkLen);
@@ -300,6 +273,18 @@ namespace Mina_Sprite_Repacker
                 Array.Copy(indices, dst, prevRow, 0, width);
             }
 
+            // Ensure transparency is 0
+            if (transIndex > 0) {
+                for (int i = 0; i < indices.Length; i++) {
+                    if (indices[i] == 0) {
+                        indices[i] = (byte)transIndex;
+                    }
+                    else if (indices[i] == transIndex) {
+                        indices[i] = 0;
+                    }
+                }
+            }
+
             return indices;
         }
         static (byte[] rgb, byte[] alpha, int count) ReadPngPalette(string path)
@@ -338,135 +323,31 @@ namespace Mina_Sprite_Repacker
                 for (int i = 0; i < Math.Min(trns.Length, count); i++)
                     alpha[i] = trns[i];
 
+            // Force transparency to be first
+            if (count > 1) {
+                int transIndex = 0;
+                byte minAlpha = alpha[0];
+                for (int i = 1; i < count; i++) {
+                    if (alpha[i] < minAlpha) {
+                        minAlpha = alpha[i];
+                        transIndex = i;
+                    }
+                }
+                if (transIndex > 0) {
+                    alpha[transIndex] = alpha[0];
+                    alpha[0] = minAlpha;
+                    int t = transIndex * 3;
+                    byte tempR = rgb[0], tempG = rgb[1], tempB = rgb[2];
+                    rgb[0] = rgb[t];
+                    rgb[1] = rgb[t + 1];
+                    rgb[2] = rgb[t + 2];
+                    rgb[t] = tempR;
+                    rgb[t + 1] = tempG;
+                    rgb[t + 2] = tempB;
+                }
+            }
+
             return (rgb, alpha, count);
-        }
-        static void UpdatePaletteWithGlobal(string palettePath, string globalPalPath, byte[] pngRgb, byte[] pngAlpha, int pngColorCount)
-        {
-            if (!File.Exists(palettePath)) {
-                Console.WriteLine($"  Palette file not found: {palettePath}");
-                return;
-            }
-
-            string content = File.ReadAllText(palettePath);
-            string[] firstLines = content.Split('\n', 3);
-            if (firstLines.Length < 2 || !firstLines[1].Trim().StartsWith("ycPaletteFormat")) {
-                Console.WriteLine($"Not a palette file: {palettePath}");
-                return;
-            }
-
-            var globalColors = ParsePaletteColors(globalPalPath);
-            if (globalColors.Count == 0) {
-                Console.WriteLine($"Could not parse global palette: {globalPalPath}");
-                return;
-            }
-
-            var globalIndices = new int[pngColorCount];
-            int paletteWidth = 0;
-
-            for (int i = 0; i < pngColorCount; i++) {
-                byte r = pngRgb[i * 3];
-                byte g = pngRgb[i * 3 + 1];
-                byte b = pngRgb[i * 3 + 2];
-                byte a = pngAlpha[i];
-
-                globalIndices[i] = FindGlobalIndex(globalColors, r, g, b, a);
-                if (globalIndices[i] >= 0) paletteWidth = i + 1;
-            }
-
-            // Update m_paletteWidth
-            content = Regex.Replace(content,
-                @"(m_paletteWidth:\s*)\d+",
-                "${1}" + paletteWidth);
-
-            // Update m_colors
-            int colorsPos = content.IndexOf("m_colors:");
-            if (colorsPos >= 0) {
-                int colorsOpen = content.IndexOf('[', colorsPos);
-                int colorsClose = FindClosingBrace(content, colorsOpen);
-                if (colorsClose >= 0) {
-                    var reserveMatch = Regex.Match(
-                        content.Substring(colorsOpen, colorsClose - colorsOpen + 1),
-                        @"Reserve:\s*(\d+)");
-                    int reserve = reserveMatch.Success ? int.Parse(reserveMatch.Groups[1].Value) : 255;
-
-                    string newColors = BuildColorsSection(pngRgb, pngAlpha, pngColorCount, reserve);
-                    content = content.Substring(0, colorsOpen) + newColors + content.Substring(colorsClose + 1);
-                }
-            }
-
-            // Update m_globalIndexData
-            int indexPos = content.IndexOf("m_globalIndexData:");
-            if (indexPos >= 0) {
-                int indexOpen = content.IndexOf('[', indexPos);
-                int indexClose = FindClosingBrace(content, indexOpen);
-                if (indexClose >= 0) {
-                    var idxReserve = Regex.Match(
-                        content.Substring(indexOpen, indexClose - indexOpen + 1),
-                        @"Reserve:\s*(\d+)");
-                    int reserve = idxReserve.Success ? int.Parse(idxReserve.Groups[1].Value) : 255;
-
-                    string newIndex = BuildGlobalIndexSection(globalIndices, pngColorCount, reserve);
-                    content = content.Substring(0, indexOpen) + newIndex + content.Substring(indexClose + 1);
-                }
-            }
-
-            File.WriteAllText(palettePath, content);
-        }
-        static string BuildColorsSection(byte[] rgb, byte[] alpha, int colorCount, int reserve)
-        {
-            var sb = new StringBuilder();
-            sb.Append("[ ( Reserve: " + reserve + " ) \n");
-
-            bool needComma = false;
-            for (int i = 0; i < reserve; i++) {
-                if (needComma) sb.Append(", ");
-                needComma = true;
-
-                if (i >= colorCount)
-                    continue;
-
-                byte r = rgb[i * 3];
-                byte g = rgb[i * 3 + 1];
-                byte b = rgb[i * 3 + 2];
-                byte a = alpha[i];
-
-                // Transparent entry: write ycColor with RGB but no alpha
-                if (a == 0) {
-                    sb.Append("\t\tycColor\n\t\t{\n");
-                    if (r != 0) sb.Append($"\t\t\tr: {r},\n");
-                    if (g != 0) sb.Append($"\t\t\tg: {g},\n");
-                    if (b != 0) sb.Append($"\t\t\tb: {b},\n");
-                    sb.Append("\t\t}");
-                    continue;
-                }
-
-                sb.Append("\t\tycColor\n\t\t{\n");
-                if (r != 0) sb.Append($"\t\t\tr: {r},\n");
-                if (g != 0) sb.Append($"\t\t\tg: {g},\n");
-                if (b != 0) sb.Append($"\t\t\tb: {b},\n");
-                if (a != 0) sb.Append($"\t\t\ta: {a},\n");
-                sb.Append("\t\t}");
-            }
-
-            sb.Append(" ]");
-            return sb.ToString();
-        }
-        static string BuildGlobalIndexSection(int[] globalIndices, int colorCount, int reserve)
-        {
-            var sb = new StringBuilder();
-            sb.Append($"[ ( Reserve: {reserve} ) ");
-
-            bool needComma = false;
-            for (int i = 0; i < reserve; i++) {
-                if (needComma) sb.Append(", ");
-                needComma = true;
-
-                if (i < colorCount && globalIndices[i] >= 0)
-                    sb.Append(globalIndices[i]);
-            }
-
-            sb.Append(" ]");
-            return sb.ToString();
         }
         static byte Paeth(byte a, byte b, byte c)
         {
@@ -511,7 +392,6 @@ namespace Mina_Sprite_Repacker
             Array.Copy(body, 0, result, 16, body.Length);
             return result;
         }
-
         static void WriteLE(byte[] buf, int off, int val)
         {
             buf[off] = (byte)(val);
@@ -519,7 +399,6 @@ namespace Mina_Sprite_Repacker
             buf[off + 2] = (byte)(val >> 16);
             buf[off + 3] = (byte)(val >> 24);
         }
-
         static int FindClosingBrace(string text, int openPos)
         {
             char open = text[openPos];

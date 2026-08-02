@@ -4,7 +4,6 @@
     {
         static void Main(string[] args)
         {
-            string currentDirectory = Path.GetDirectoryName(Environment.CurrentDirectory);
             bool repackMode = false;
             string repackFilePath = "";
 
@@ -12,11 +11,12 @@
                 Console.WriteLine("No arguments given: you can -extract, -repack, or -repack \"filepath\"");
                 return;
             }
-            if (args[0] == "-extract" || args[0] == "extract" || args[0] == "-e") {
+            if (args[0] == "-extract" || args[0] == "-e") {
                 Console.WriteLine("Extracting all sprites...");
-                Extract.ExtractAllSprites(currentDirectory);
+                Extract.ExtractAllSprites();
+                Console.WriteLine($"Finished extracting");
             }
-            else if (args[0] == "-repack" || args[0] == "repack" || args[0] == "-r") {
+            else if (args[0] == "-repack" || args[0] == "-r") {
                 repackMode = true;
             }
             else {
@@ -27,13 +27,15 @@
             if (repackMode) {
                 if (args.Length < 2) {
                     Console.WriteLine("Repacking all sprites...");
-                    Repack.RepackAllSprites(currentDirectory);
+                    Repack.RepackAllSprites();
                 }
                 else {
                     repackFilePath = args[1];
                     Console.WriteLine($"Repacking {repackFilePath}...");
-                    Repack.RepackSingleSprite(currentDirectory, repackFilePath);
+                    Repack.RepackSingleSprite(repackFilePath);
                 }
+
+                Console.WriteLine($"Finished repacking");
             }
 
             return;

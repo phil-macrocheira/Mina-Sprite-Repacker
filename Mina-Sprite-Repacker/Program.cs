@@ -9,7 +9,7 @@
             string repackFilePath = "";
 
             if (args.Length == 0) {
-                Console.WriteLine("No arguments given: you can -extract, -repack, or -repack \"filepath>\"");
+                Console.WriteLine("No arguments given: you can -extract, -repack, or -repack \"filepath\"");
                 return;
             }
             if (args[0] == "-extract" || args[0] == "extract" || args[0] == "-e") {
@@ -20,7 +20,7 @@
                 repackMode = true;
             }
             else {
-                Console.WriteLine($"Unknown argument '{args[0]}' given: you can -extract, -repack, or -repack \"filepath>\"");
+                Console.WriteLine($"Unknown argument '{args[0]}' given: you can -extract, -repack, or -repack \"filepath\"");
                 return;
             }
 

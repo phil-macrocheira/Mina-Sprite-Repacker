@@ -8,6 +8,10 @@ namespace Mina_Sprite_Repacker
     {
         public static void RepackAllSprites()
         {
+#if DEBUG
+            File.Copy(@"C:\Users\Phil\Desktop\unpak\data\dialogue\charPortraitTrainAuthority.anb.yc", @"C:\Users\Phil\AppData\Roaming\Yacht Club Games\Mina the Hollower\mods\UFO50\data\dialogue\charPortraitTrainAuthority.anb.yc", true);
+            File.Copy(@"C:\Users\Phil\Desktop\unpak\data\NPCs\trainAuthority.anb.yc", @"C:\Users\Phil\AppData\Roaming\Yacht Club Games\Mina the Hollower\mods\UFO50\data\NPCs\trainAuthority.anb.yc", true);
+#endif
             var spritePaths = Directory.EnumerateFiles(Constants.spritesRoot, "*.png", SearchOption.AllDirectories);
 
             foreach (string spritePath in spritePaths) {

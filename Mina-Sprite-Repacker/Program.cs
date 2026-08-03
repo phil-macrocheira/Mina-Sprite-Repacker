@@ -5,17 +5,17 @@
         static void Main(string[] args)
         {
             bool repackMode = false;
-            bool getNames = false;
+            bool getNames = true;
             string repackFilePath = "";
 
             if (args.Length == 0) {
-                Console.WriteLine("No arguments given: you can -extract, -repack, or -repack \"filepath\"");
+                Console.WriteLine("No arguments given: you can -extract or -repack");
                 return;
             }
             if (args[0] == "-extract" || args[0] == "-e") {
                 if (args.Length >= 2) {
-                    if (args[1] == "-names" || args[1] == "-n") {
-                        getNames = true;
+                    if (args[1] == "-nonames" || args[1] == "-n") {
+                        getNames = false;
                     }
                 }
 
@@ -27,19 +27,14 @@
                 repackMode = true;
             }
             else {
-                Console.WriteLine($"Unknown argument '{args[0]}' given: you can -extract, -repack, or -repack \"filepath\"");
+                Console.WriteLine($"Unknown argument '{args[0]}' given: you can -extract or -repack");
                 return;
             }
 
             if (repackMode) {
                 if (args.Length < 2) {
-                    Console.WriteLine("Repacking all sprites...");
+                    Console.WriteLine("Repacking sprites...");
                     Repack.RepackAllSprites();
-                }
-                else {
-                    repackFilePath = args[1];
-                    Console.WriteLine($"Repacking {repackFilePath}...");
-                    Repack.RepackSingleSprite(repackFilePath);
                 }
 
                 Console.WriteLine($"Finished repacking");

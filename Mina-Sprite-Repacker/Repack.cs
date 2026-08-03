@@ -395,6 +395,10 @@ namespace Mina_Sprite_Repacker
                 EmitLiterals(payload, input, litStart + firstChunk, litCount - firstChunk);
             }
 
+            payload.WriteByte(0);
+            payload.WriteByte(0);
+            payload.WriteByte(0);
+            payload.WriteByte(0);
             byte[] payloadBytes = payload.ToArray();
             var result = new byte[16 + payloadBytes.Length];
             result[0] = 0x57; result[1] = 0x46; result[2] = 0x4C; result[3] = 0x5A;
